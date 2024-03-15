@@ -52,6 +52,7 @@ class LLMHandler:
         tokens: list[int] | np.ndarray | torch.Tensor --- tokens that need to be decoded
         skip_special_tokens: bool = False --- skipping special tokens (such as "<s>", "</s>" and "<unk>")
         \nreturns a decoded string (text)'''
+        skip_special_tokens = bool(skip_special_tokens)
         output = self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
         return output
     

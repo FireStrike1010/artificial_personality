@@ -11,6 +11,7 @@ if len(args) == 2:
 else:
     cb = ChatBot(args[0])
 
+print('-'*80)
 name, res = cb.start()
 print(textwrap.fill(f'{name}: {res}', width = 80))
 
@@ -21,3 +22,4 @@ while True:
     name, res = cb.send_message(inp)
     name, res = cb.get_responce()
     print(textwrap.fill(f'{name}: {res}', width=80))
+    print('-'*80)

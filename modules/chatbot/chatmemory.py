@@ -2,6 +2,7 @@ from torch import Tensor
 import numpy as np
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 from datetime import datetime
+from pathlib import Path
 
 class ChatMemory:
     '''History of messages\n
@@ -22,16 +23,12 @@ class ChatMemory:
         tokenized_message: Tensor | list | np.ndarray --- encoded (tekenized) message'''
         self.message_owner.append(owner)
         self.history.append(message)
-        match type(tokenized_message).__name__:
-            case 'Tensor':
-                tokenized_message = tokenized_message.numpy().astype(np.int32)
-            case 'list':
-                tokenized_message = np.array(tokenized_message, dtype=np.int32)
-            case 'ndarray':
-                pass
-            case _:
-                raise TypeError('tokenized_message must be Tensor, list or np.ndarray')
-        self._tokenized_history.append(tokenized_message)
+        if isinstance(tokenized_message, list):
+            self._tokenized_history.append(np.array(tokenized_message).astype(np.int32))
+        elif isinstance(tokenized_message, Tensor):
+            self._tokenized_history.append(np.array(tokenized_message.numpy().astype(np.int32)))
+        else:
+            self._tokenized_history.append(tokenized_message.astype(np.int32))
         self.datetime.append(str(datetime.now()))
     
     def _retokenize(self, tokenizer_name: str, tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
@@ -41,9 +38,10 @@ class ChatMemory:
         tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast --- new tokenizer
         add_special_tokens: bool = True --- adding special tokens (such as "<s>", "</s>" and "<unk>")'''
         self._tokenizer_name = tokenizer_name
-        for i, text in enumerate(self.history):
-            self._tokenized_history[i] = np.array(
-                tokenizer.encode(text, add_special_tokens=add_special_tokens)).astype(np.int32)
+        self._tokenized_history = []
+        for text in self.history:
+            self._tokenized_history.append(np.array(
+                tokenizer.encode(text, add_special_tokens=add_special_tokens)).astype(np.int32))
         
     def get_history(self, message_number: int = 'all') -> list[str]:
         '''get_history --- get list of last messages
