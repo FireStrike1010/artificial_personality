@@ -10,4 +10,3 @@ Base requirements: NVIDIA Cuda 12.1 and Python 3.10 <br>
 3. Copy all files from this repository (using "git clone" or manualy) to that enviroment folder
 2. Activate virtual enviroment - Scripts/Activate.ps1 (Scripts/activate for linux)
 4. Install libraries - pip install requirements.txt
-5. Run example - python example.py "path_to_model_folder" "path_to_character_card"
