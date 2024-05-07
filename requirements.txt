@@ -1,3 +1,7 @@
 autoawq
 https://huggingface.co/r4ziel/xformers_pre_built/resolve/main/triton-2.0.0-cp310-cp310-win_amd64.whl
 torch==2.2.1+cu121
+python-dotenv
+python-telegram-bot
+fastapi
+uvicorn
