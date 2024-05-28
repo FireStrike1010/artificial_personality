@@ -1,5 +1,4 @@
-from modules.telegram.chatmemory import ChatMemory
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
+from modules.interface.chatmemory import ChatMemory
 from telegram import Message
 from typing import Optional
 
@@ -14,8 +13,3 @@ class User:
         self.current_memory: ChatMemory | None = None
         self.current_character: str | None = None
         self.memories: dict[str, ChatMemory] = {}
-    
-    def _retokenize(self, tokenizer_name: str, tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast):
-        for memory in self.memories.values():
-            if memory._tokenizer_name != tokenizer_name:
-                memory._retokenize(tokenizer_name, tokenizer)

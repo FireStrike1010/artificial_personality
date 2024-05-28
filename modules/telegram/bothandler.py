@@ -8,12 +8,11 @@ from typing import NoReturn
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
-from modules.chatbot.model import LLMHandler
-from modules.chatbot.character import Character
-from modules.chatbot.chatmemory import ChatMemory
-from torch import device, Tensor, int32
 
-from modules.telegram.user import User
+from modules.interface import ChatMemory, Character
+from modules.modelhandler import LLM, ChatBot
+
+from .user import User
 
 class TelegramBot:
     def __init__(self, token: str) -> None:
@@ -31,7 +30,7 @@ class TelegramBot:
     async def save(self) -> None:
         import pickle
         from datetime import datetime
-        file_name = Path(datetime.now().strftime(format='%Y%m%d_%H%M%S')+'.pickle')
+        file_name = Path(datetime.now().strftime(format='%Y%m%d_%H%M%S')+'.pickle') #type: ignore
         with open(self.saves_folder/file_name, mode='wb') as file:
             pickle.dump(self.users, file)
     
@@ -67,33 +66,23 @@ class TelegramBot:
             self.logger = logging
             self.logger.disable()
     
-    def set_LLM(self, LLM: LLMHandler | str, device: str | device = 'cuda', default_settings: dict[str, int | float] = {}) -> None:
-        self.default_settings = {'temperature': default_settings.get('temperature', 0.5),
-                                 'top_p': default_settings.get('top_p', 0.5),
+    def set_LLM(self, chatbot: str | ChatBot, device: str = 'cuda', default_settings: dict[str, int | float] = {}) -> None:
+        self.default_settings = {'temperature': default_settings.get('temperature', 0.8),
+                                 'top_p': default_settings.get('top_p', 0.8),
                                  'top_k': default_settings.get('top_k', 40),
                                  'max_new_tokens': default_settings.get('max_new_tokens', 64),
                                  'memory_size': default_settings.get('memory_size', 10)}
         self.logger.info(f"Loading LLM into {device}...")
-        if isinstance(LLM, LLMHandler):
-            self.LLM = LLM
+        if isinstance(chatbot, ChatBot):
+            self.chatbot = chatbot
         else:
-            self.LLM = LLMHandler(LLM, device)
-        self.logger.info(f"LMM ({self.LLM.model_name}) loaded successfully")
-        self.__system = self.LLM.encode('Me:', add_special_tokens = False)
-        self.__user = self.LLM.encode('You:', add_special_tokens = False)
-        for character in self.characters.values():
-            character._retokenize(self.LLM.model_name, self.LLM.tokenizer)
-            self.logger.info(f"Character ({character.card['name']}) card successfully retokenized")
-        for user in self.users.values():
-            if user.current_memory is None:
-                continue
-            if user.current_memory._tokenizer_name != self.LLM.model_name:
-                user.current_memory._retokenize(self.LLM.model_name, self.LLM.tokenizer)
-                self.logger.info(f"User current memory successfully retokenized")
+            model = LLM(chatbot, device=device)
+            self.chatbot = ChatBot(model)
+        self.logger.info(f"LLM ({self.chatbot.llm.model_name}) loaded successfully")
 
     def add_character(self, path: str | Path, tokenize: bool = True) -> None:
-        if tokenize and not hasattr(self, 'LLM'):
-            raise ValueError('The TelegramBot does not have LLMHandler, use set_LLM() to add one')
+        if tokenize and not hasattr(self, 'chatbot'):
+            raise ValueError('The TelegramBot does not have chatbot, use set_LLM() to add one')
         path = Path(path) if isinstance(path, str) else path
         if path.is_dir():
             characters_paths = []
@@ -108,9 +97,6 @@ class TelegramBot:
             try:
                 character = Character(path)
                 self.logger.info(f"Character card ({str(path)}) loaded successfully")
-                if tokenize:
-                    character._retokenize(self.LLM.model_name, self.LLM.tokenizer)
-                    self.logger.info(f"Character ({character.card['name']}) card successfully retokenized")
                 self.characters[character.card['name']] = character
                 self._characters_path.add(path)
             except:
@@ -119,7 +105,7 @@ class TelegramBot:
     def run(self) -> None | NoReturn:
         if not hasattr(self, 'application'):
             raise AttributeError('Telegram Bot (application) was not built use .build()')
-        if not hasattr(self, 'LLM'):
+        if not hasattr(self, 'chatbot'):
             raise AttributeError('Telegram Bot do not have an LLMHandler use .set_LLM()')
         self.logger.info("Running a Telegram Bot...")
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -181,9 +167,11 @@ class TelegramBot:
             await self.select_character(update, context, data)
             await context.bot.delete_message(user.current_callback.chat_id, user.current_callback.message_id)
             user.current_callback = None
-        elif data == 'settings back':
+        elif data == 'settings_back':
             await context.bot.delete_message(user.current_callback.chat_id, user.current_callback.message_id)
             user.current_callback = None
+            user.current_callback_message = None
+            user.current_callback_message_type = None
         elif data == 'temperature':
             user.current_callback_message_type = data
             user.current_callback_message = await context.bot.send_message(context._chat_id, f'''
@@ -234,7 +222,7 @@ Type new integer value between 0 and ∞ (standart - between 5 and 10, if you wa
         if user.current_character != character_name:
             memory = user.memories.get(character_name)
             if memory is None:
-                memory = ChatMemory(self.LLM.model_name, user.username)
+                memory = ChatMemory()
                 user.memories[character_name] = memory
             user.current_memory = memory
             user.current_character = character_name
@@ -251,12 +239,12 @@ Type new integer value between 0 and ∞ (standart - between 5 and 10, if you wa
             await update.message.reply_text('System: Use /start to select a character')
             return
         settings = user.generate_settings
-        buttons = [[InlineKeyboardButton(f"Temperature: {settings['temperature']}", callback_data='temperature')],
-                   [InlineKeyboardButton(f"Top-p: {settings['top_p']}", callback_data='top_p')],
-                   [InlineKeyboardButton(f"Top-k: {settings['top_k']}", callback_data='top_k')],
-                   [InlineKeyboardButton(f"Generate tokens: {settings['max_new_tokens']}", callback_data='max_new_tokens')],
-                   [InlineKeyboardButton(f"Memory size: {settings['memory_size']}", callback_data='memory_size')],
-                   [InlineKeyboardButton('« Back', callback_data='settings back')]]
+        buttons = [[InlineKeyboardButton(f"Temperature: {settings['temperature']}", callback_data='temperature')], # type: ignore
+                   [InlineKeyboardButton(f"Top-p: {settings['top_p']}", callback_data='top_p')], # type: ignore
+                   [InlineKeyboardButton(f"Top-k: {settings['top_k']}", callback_data='top_k')], # type: ignore
+                   [InlineKeyboardButton(f"Generate tokens: {settings['max_new_tokens']}", callback_data='max_new_tokens')], # type: ignore
+                   [InlineKeyboardButton(f"Memory size: {settings['memory_size']}", callback_data='memory_size')], # type: ignore
+                   [InlineKeyboardButton('« Back', callback_data='settings_back')]]
         buttons = InlineKeyboardMarkup(buttons)
         user.current_callback = await update.message.reply_text('Select setting that you want to change:', reply_markup=buttons)
     
@@ -283,70 +271,45 @@ System:
             match user.current_callback_message_type:
                 case 'temperature':
                     value = abs(float(value))
-                    user.generate_settings['temperature'] = value
+                    user.generate_settings['temperature'] = value # type: ignore
                 case 'top_p':
                     value = abs(float(value))
-                    user.generate_settings['top_p'] = value
+                    user.generate_settings['top_p'] = value # type: ignore
                 case 'top_k':
                     value = abs(int(value))
-                    user.generate_settings['top_k'] = value
+                    user.generate_settings['top_k'] = value # type: ignore
                 case 'max_new_tokens':
                     value = abs(int(value))
-                    user.generate_settings['max_new_tokens'] = value
+                    user.generate_settings['max_new_tokens'] = value # type: ignore
                 case 'memory_size':
                     try:
                         value = abs(int(value))
                     except:
                         value = 'all'
-                    user.generate_settings['memory_size'] = value
+                    user.generate_settings['memory_size'] = value # type: ignore
             self.logger.info(f"User @{user.username} changed the {user.current_callback_message_type} setting on {value}")
             user.current_callback_message_type = None
             try:
                 await context.bot.delete_message(user.current_callback_message.chat_id, user.current_callback_message.message_id)
-                await context.bot.delete_message(user.current_callback.chat_id, user.current_callback.message_id)
+                await context.bot.delete_message(user.current_callback.chat_id, user.current_callback.message_id) # type: ignore
             except:
                 pass
             await self.settings(update, context)
         else:
-            def procces_responce(self, responce: np.ndarray) -> str:
-                end = np.where(responce == self.__system[0])[0]
-                if len(end) > 0:
-                    end = end[-1]
-                    responce = responce[:end]
-                text_responce = self.LLM.decode(responce)
-                end = text_responce.find('You:')
-                if end != -1:
-                    text_responce = text_responce[:end]
-                else:
-                    end = text_responce[::-1].find('.')
-                    if end != -1:
-                        text_responce = text_responce[:len(text_responce)-end]
-                return text_responce
             text = update.message.text
-            tokenized_text = self.LLM.encode('You: ' + text)
-            user.current_memory.add_message(user.first_name, text, tokenized_text)
             character = self.characters.get(user.current_character)
-            self.logger.debug(f"""@{user.username} to {character.card['name']}: "{text}" """)
-            prompt = user.current_memory.get_tokenized_history(user.generate_settings['memory_size'])
-            prompt += [character._tokenized_context]
-            prompt.append(np.array([1]))
-            prompt.append(self.__system)
-            prompt = np.hstack(prompt)
-            prompt = Tensor(prompt).type(int32).cuda(self.LLM._device)
-            responce = self.LLM.generate(prompt, **user.generate_settings)
-            prompt = prompt.cpu().numpy()
-            responce = responce[prompt.shape[0]:]
-            text_responce = procces_responce(self, responce)
-            responce = self.LLM.encode(text_responce)
-            user.current_memory.add_message(character.card['name'], text_responce, responce)
-            await update.message.reply_text(text_responce)
-            self.logger.debug(f"""{character.card['name']} to @{user.username}: "{text_responce}" """)
+            self.logger.debug(f"""@{user.username} to {character.card['name']}: "{text}" """) # type: ignore
+            responce = self.chatbot(prompt=text, history=user.current_memory.get_history(self.default_settings.get('memory_size', 'all')), # type: ignore
+                                    context=character.card['context'], **user.generate_settings) # type: ignore
+            user.current_memory.add_message(responce['input']['role'], responce['input']['content'])
+            user.current_memory.add_message(responce['output']['role'], responce['output']['content'])
+            await update.message.reply_text(responce['output']['content'])
+            self.logger.debug(f"""{character.card['name']} to @{user.username}: "{responce['output']['content']}" """) #type: ignore
 
     async def send_first_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = await self._get_user(update)
-        character = self.characters.get(user.current_character)
-        greeting = character.card['greeting']
-        tokenized_greeting = self.LLM.encode('Me: ' + greeting)
-        user.current_memory.add_message(character.card['name'], greeting, tokenized_greeting)
-        await context.bot.send_message(context._chat_id, greeting)
-        self.logger.debug(f"""{character.card['name']} to @{user.username}: "{greeting}" """)
+        character = self.characters.get(user.current_character) #type: ignore
+        greeting = character.card['greeting'] #type: ignore
+        user.current_memory.add_message(self.chatbot.my_name, greeting) #type: ignore
+        await context.bot.send_message(context._chat_id, greeting) #type: ignore
+        self.logger.debug(f"""{character.card['name']} to @{user.username}: "{greeting}" """) #type: ignore
